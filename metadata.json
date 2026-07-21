@@ -1,0 +1,6 @@
+{
+  "name": "Trademind-AI",
+  "description": "World-class AI Trading platform featuring real-time market data, AI chart screenshot analysis, live TradingView charts, and a conversational trading intelligence assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
