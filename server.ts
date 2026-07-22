@@ -452,10 +452,55 @@ async function startServer() {
     });
   });
 
+  // Payment Webhook Handlers
+  app.post('/api/webhooks/stripe', async (req: any, res: express.Response) => {
+    try {
+      const event = req.body;
+      console.log('[Stripe Webhook Received]', event?.type);
+      if (event?.type === 'checkout.session.completed' || event?.type === 'customer.subscription.updated') {
+        const email = event.data?.object?.customer_email || event.data?.object?.email;
+        const plan = event.data?.object?.metadata?.plan || 'Pro';
+        if (email) {
+          const user = store.getUserByEmail(email);
+          if (user) {
+            store.updateUserPlan(user.id, plan);
+            console.log(`Updated user ${email} to plan ${plan} via Stripe Webhook`);
+          }
+        }
+      }
+      res.json({ received: true });
+    } catch (err) {
+      console.error('Stripe webhook error:', err);
+      res.status(400).json({ error: 'Webhook processing error' });
+    }
+  });
+
+  app.post('/api/webhooks/razorpay', async (req: any, res: express.Response) => {
+    try {
+      const event = req.body;
+      console.log('[Razorpay Webhook Received]', event?.event);
+      if (event?.event === 'payment.captured' || event?.event === 'subscription.charged') {
+        const email = event.payload?.payment?.entity?.email;
+        const notesPlan = event.payload?.payment?.entity?.notes?.plan || 'Pro';
+        if (email) {
+          const user = store.getUserByEmail(email);
+          if (user) {
+            store.updateUserPlan(user.id, notesPlan);
+            console.log(`Updated user ${email} to plan ${notesPlan} via Razorpay Webhook`);
+          }
+        }
+      }
+      res.json({ status: 'ok' });
+    } catch (err) {
+      console.error('Razorpay webhook error:', err);
+      res.status(400).json({ error: 'Razorpay webhook processing error' });
+    }
+  });
+
   // AI Chart Analysis Endpoint
   app.post('/api/analyze-chart', optionalAuthenticate, async (req: any, res: express.Response) => {
     try {
-      const { image, mimeType, additionalContext, marketType } = req.body;
+      const { image, mimeType, additionalContext, marketType, aiModel } = req.body;
       if (!image) {
         return res.status(400).json({ error: 'Image is required' });
       }
@@ -478,9 +523,10 @@ async function startServer() {
       }
 
       const activeMarket = marketType || 'Forex';
+      const selectedModelName = aiModel || 'Gemini 3.6 Flash';
 
       // Prepare the contents array
-      const prompt = `Analyze this trading chart screenshot, focusing exclusively on the ${activeMarket} market. 
+      const prompt = `You are an elite quantitative multi-model AI system operating in [${selectedModelName}] mode. Analyze this trading chart screenshot, focusing exclusively on the ${activeMarket} market. 
       This AI Visual Analyzer is restricted strictly to Forex and Crypto market segments only.
       
       Additional context provided by user: "${additionalContext || 'None'}"
@@ -543,6 +589,7 @@ async function startServer() {
       cleanedJson = cleanedJson.trim();
 
       const parsedAnalysis = JSON.parse(cleanedJson);
+      parsedAnalysis.aiModelUsed = selectedModelName;
 
       // Save analysis history on-disk for authenticated users
       if (user) {

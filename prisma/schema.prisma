@@ -1,0 +1,88 @@
+// Prisma Schema for Trademind AI Terminal (PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Plan {
+  Free
+  Pro
+  Enterprise
+}
+
+enum MarketType {
+  Forex
+  Crypto
+}
+
+enum SignalRecommendation {
+  BUY
+  SELL
+  HOLD
+}
+
+model User {
+  id               String            @id @default(uuid())
+  email            String            @unique
+  name             String?
+  passwordHash     String?
+  role             Role              @default(USER)
+  plan             Plan              @default(Free)
+  emailVerified    Boolean           @default(false)
+  supabaseUid      String?           @unique
+  stripeCustomerId String?
+  razorpayCustId   String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  analyses         AnalysisHistory[]
+  subscriptions    Subscription[]
+}
+
+model AnalysisHistory {
+  id                 String               @id @default(uuid())
+  userId             String
+  user               User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticker             String
+  marketType         MarketType           @default(Forex)
+  trend              String
+  recommendation     SignalRecommendation
+  support            String
+  resistance         String
+  entry              String
+  stopLoss           String
+  takeProfit1        String
+  takeProfit2        String
+  riskRewardRatio    String
+  confidenceScore    Int
+  reasons            String[]
+  reasoning          String
+  bullishProbability Int
+  patternDetected    String?
+  indicatorDetails   String?
+  aiModelUsed        String               @default("gemini-3.6-flash")
+  createdAt          DateTime             @default(now())
+}
+
+model Subscription {
+  id                   String   @id @default(uuid())
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 Plan
+  status               String   // active, canceled, past_due
+  stripeSubscriptionId String?
+  razorpaySubId        String?
+  currentPeriodStart   DateTime
+  currentPeriodEnd     DateTime
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}

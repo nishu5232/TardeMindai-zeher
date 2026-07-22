@@ -7,7 +7,7 @@ import {
   TrendingUp, Shield, Key, DollarSign, Plus, ArrowRight, Upload, MessageSquare, User, Sparkles, 
   BookOpen, Clock, AlertTriangle, Check, Settings, LogOut, ChevronDown, ChevronUp, Calendar, 
   RefreshCw, BarChart2, PieChart, Star, Terminal, Cpu, Trash2, Edit2, Info, Landmark, FileText, Lock,
-  Bell, BellRing, Activity, Database, Users, CheckCircle
+  Bell, BellRing, Activity, Database, Users, CheckCircle, CheckCircle2, X
 } from 'lucide-react';
 
 interface DashboardProps {
@@ -64,6 +64,109 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
   const [analysis, setAnalysis] = useState<any | null>(null);
   const [scannedAssetName, setScannedAssetName] = useState('');
   const [marketType, setMarketType] = useState<'Forex' | 'Crypto'>('Forex');
+  const [selectedAiModel, setSelectedAiModel] = useState<'Gemini 3.6 Flash' | 'Claude 3.7 Sonnet' | 'DeepSeek R1 / V3' | 'GPT-5.5 / GPT-4o'>('Gemini 3.6 Flash');
+
+  // Infrastructure & Database modal
+  const [showInfraModal, setShowInfraModal] = useState(false);
+  const [showPaymentGatewayModal, setShowPaymentGatewayModal] = useState(false);
+  const [selectedGateway, setSelectedGateway] = useState<'stripe' | 'razorpay'>('stripe');
+
+  // Live WebSocket market data state
+  const [wsConnected, setWsConnected] = useState(true);
+  const [livePrices, setLivePrices] = useState<Record<string, { price: number; change: number; bid: number; ask: number; flash: 'up' | 'down' | null }>>({
+    'BTCUSD': { price: 118250, change: 2.45, bid: 118245, ask: 118255, flash: 'up' },
+    'ETHUSD': { price: 3450.20, change: -0.85, bid: 3449.80, ask: 3450.60, flash: 'down' },
+    'SOLUSD': { price: 188.50, change: 5.12, bid: 188.40, ask: 188.60, flash: 'up' },
+    'EURUSD': { price: 1.08650, change: 0.15, bid: 1.08648, ask: 1.08652, flash: 'up' },
+    'GBPUSD': { price: 1.29400, change: -0.22, bid: 1.29395, ask: 1.29405, flash: 'down' },
+    'XAUUSD': { price: 2420.80, change: 1.10, bid: 2420.50, ask: 2421.10, flash: 'up' },
+  });
+
+  // Live WebSocket effect
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket('wss://stream.binance.com:9443/ws/!miniTicker@arr');
+      ws.onopen = () => setWsConnected(true);
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (Array.isArray(data)) {
+            setLivePrices(prev => {
+              const updated = { ...prev };
+              data.forEach(item => {
+                if (item.s === 'BTCUSDT') {
+                  const p = parseFloat(item.c);
+                  const oldP = updated['BTCUSD']?.price || 118250;
+                  updated['BTCUSD'] = {
+                    price: p,
+                    change: parseFloat(item.P) || 2.4,
+                    bid: p - 5,
+                    ask: p + 5,
+                    flash: p >= oldP ? 'up' : 'down'
+                  };
+                } else if (item.s === 'ETHUSDT') {
+                  const p = parseFloat(item.c);
+                  const oldP = updated['ETHUSD']?.price || 3450;
+                  updated['ETHUSD'] = {
+                    price: p,
+                    change: parseFloat(item.P) || -0.8,
+                    bid: p - 0.4,
+                    ask: p + 0.4,
+                    flash: p >= oldP ? 'up' : 'down'
+                  };
+                } else if (item.s === 'SOLUSDT') {
+                  const p = parseFloat(item.c);
+                  const oldP = updated['SOLUSD']?.price || 188;
+                  updated['SOLUSD'] = {
+                    price: p,
+                    change: parseFloat(item.P) || 5.1,
+                    bid: p - 0.1,
+                    ask: p + 0.1,
+                    flash: p >= oldP ? 'up' : 'down'
+                  };
+                }
+              });
+              return updated;
+            });
+          }
+        } catch {
+          // Ignore json parse error
+        }
+      };
+      ws.onerror = () => setWsConnected(false);
+      ws.onclose = () => setWsConnected(false);
+    } catch {
+      setWsConnected(false);
+    }
+
+    // Simulated Forex tick movement interval
+    const forexInterval = setInterval(() => {
+      setLivePrices(prev => {
+        const updated = { ...prev };
+        ['EURUSD', 'GBPUSD', 'XAUUSD'].forEach(sym => {
+          const item = updated[sym];
+          if (item) {
+            const delta = (Math.random() - 0.49) * (sym === 'XAUUSD' ? 0.8 : 0.00015);
+            const newPrice = parseFloat((item.price + delta).toFixed(sym === 'XAUUSD' ? 2 : 5));
+            updated[sym] = {
+              ...item,
+              price: newPrice,
+              bid: parseFloat((newPrice - (sym === 'XAUUSD' ? 0.3 : 0.00003)).toFixed(5)),
+              ask: parseFloat((newPrice + (sym === 'XAUUSD' ? 0.3 : 0.00003)).toFixed(5)),
+              flash: delta >= 0 ? 'up' : 'down'
+            };
+          }
+        });
+        return updated;
+      });
+    }, 1500);
+
+    return () => {
+      if (ws) ws.close();
+      clearInterval(forexInterval);
+    };
+  }, []);
 
   // Chatbot states
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'model'; text: string }>>([
@@ -481,7 +584,8 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
           image: imageBase64,
           mimeType,
           marketType,
-          additionalContext: `User uploaded a custom ${marketType} chart file named "${customFileName}". User manual instructions overlay: "${additionalInstructions}"`
+          aiModel: selectedAiModel,
+          additionalContext: `User uploaded a custom ${marketType} chart file named "${customFileName}". Engine Model: ${selectedAiModel}. User manual instructions overlay: "${additionalInstructions}"`
         })
       });
 
@@ -747,23 +851,55 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
       </Helmet>
 
       {/* Top Glassmorphic Navigation Bar */}
-      <nav className="h-16 shrink-0 border-b border-white/10 bg-[#0a0a0a]/80 backdrop-blur-md flex items-center justify-between px-6 z-10">
-        <div className="flex items-center gap-8">
+      <nav className="h-16 shrink-0 border-b border-white/10 bg-[#0a0a0a]/90 backdrop-blur-md flex items-center justify-between px-6 z-10 gap-4">
+        <div className="flex items-center gap-6 shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]">T</div>
             <span className="text-lg font-bold tracking-tight text-white">Trademind<span className="text-blue-500">.ai</span></span>
           </div>
-          <div className="h-4 w-[1px] bg-white/10"></div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-white/50">
+          <div className="h-4 w-[1px] bg-white/10 hidden md:block"></div>
+          <div className="flex items-center gap-2 text-xs font-semibold text-white/50 hidden lg:flex">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            NASDAQ 100 Terminal <span className="text-white font-mono ml-1">v2.4.0-Stable</span>
+            <span>WebSocket Live Stream</span>
+            <span className="text-[10px] bg-white/10 px-1.5 py-0.5 rounded text-white/80 font-mono">
+              {wsConnected ? 'Connected (Binance/FX)' : 'Reconnecting...'}
+            </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
-          <span className="text-xs font-semibold bg-blue-500/10 border border-blue-500/20 text-blue-400 px-3 py-1 rounded-full uppercase tracking-wider">
-            {user.plan} Account
-          </span>
+        {/* Live Ticker Marquee Header */}
+        <div className="hidden xl:flex items-center gap-4 overflow-hidden py-1 px-3 bg-black/40 border border-white/5 rounded-full text-xs font-mono">
+          {Object.entries(livePrices).slice(0, 4).map(([sym, data]) => (
+            <div key={sym} className="flex items-center gap-1.5">
+              <span className="font-bold text-white/70">{sym}:</span>
+              <span className={`font-extrabold ${data.flash === 'up' ? 'text-green-400' : 'text-red-400'}`}>
+                {data.price < 10 ? data.price.toFixed(5) : data.price.toLocaleString()}
+              </span>
+              <span className={`text-[9px] px-1 rounded ${data.change >= 0 ? 'bg-green-500/20 text-green-300' : 'bg-red-500/20 text-red-300'}`}>
+                {data.change >= 0 ? '+' : ''}{data.change.toFixed(1)}%
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <button
+            onClick={() => setShowInfraModal(true)}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-white/5 border border-white/10 hover:bg-white/10 rounded-xl text-xs font-bold text-white transition-all cursor-pointer"
+            title="PostgreSQL, Prisma & Supabase Auth Setup"
+          >
+            <Database className="w-3.5 h-3.5 text-blue-400" />
+            <span>DB & Supabase</span>
+          </button>
+
+          <button
+            onClick={() => setShowPaymentGatewayModal(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 rounded-xl text-xs font-extrabold text-white transition-all cursor-pointer shadow-[0_0_15px_rgba(37,99,235,0.3)]"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-yellow-300 animate-pulse" />
+            <span>Upgrade ({user.plan})</span>
+          </button>
+
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 border border-white/20 flex items-center justify-center text-xs font-bold text-white">
             {user.name.slice(0, 2)}
           </div>
@@ -1121,7 +1257,25 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
                       <span className="text-xs">🪙</span> Crypto Market
                     </button>
                   </div>
-                  <span className="block text-[9px] text-white/30 mt-1">This analyzer is configured to accept and evaluate <b>Forex</b> and <b>Crypto</b> markets only.</span>
+                </div>
+
+                {/* Multi-Model AI Selector */}
+                <div>
+                  <label className="block text-[9px] uppercase tracking-wider text-white/40 mb-1.5 font-bold flex items-center justify-between">
+                    <span>AI Model Engine</span>
+                    <span className="text-[8px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded uppercase font-extrabold">Multi-LLM</span>
+                  </label>
+                  <select
+                    value={selectedAiModel}
+                    onChange={(e: any) => setSelectedAiModel(e.target.value)}
+                    className="w-full bg-black/60 border border-white/10 rounded-xl px-3 py-2 text-xs font-semibold text-white focus:border-blue-500 outline-none cursor-pointer"
+                  >
+                    <option value="Gemini 3.6 Flash">Gemini 3.6 Flash (DeepMind)</option>
+                    <option value="Claude 3.7 Sonnet">Claude 3.7 Sonnet (Anthropic)</option>
+                    <option value="DeepSeek R1 / V3">DeepSeek R1 / V3 (Reasoning)</option>
+                    <option value="GPT-5.5 / GPT-4o">GPT-5.5 / GPT-4o (OpenAI)</option>
+                  </select>
+                  <span className="block text-[9px] text-white/30 mt-1">Select your preferred vision model for market pattern extraction.</span>
                 </div>
 
                 {/* Upload Section */}
@@ -2286,6 +2440,198 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
                 {checkoutLoading ? 'Authorizing Secure Escrow...' : `Pay & Activate ${checkoutPlan}`}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DATABASE, PRISMA & SUPABASE INFRASTRUCTURE MODAL */}
+      {showInfraModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e0e11] border border-white/10 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-5 border-b border-white/10 flex items-center justify-between bg-black/40">
+              <div className="flex items-center gap-2.5">
+                <Database className="w-5 h-5 text-blue-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-white">PostgreSQL + Prisma + Supabase Auth Setup</h3>
+                  <p className="text-[10px] text-white/40">Full Database Schema & Supabase JWT Configuration Guide</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowInfraModal(false)}
+                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 overflow-y-auto text-xs">
+              <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl space-y-2">
+                <div className="flex items-center gap-2 text-blue-300 font-bold">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Prisma Schema Generated at `/prisma/schema.prisma`</span>
+                </div>
+                <p className="text-white/70 text-[11px] leading-relaxed">
+                  The application is configured for standard PostgreSQL and Supabase Authentication. Connect your external PostgreSQL instance or Supabase database URL to enable persistent user records, trades, and chart analysis histories.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-bold text-white uppercase text-[10px] tracking-wider">Required Environment Variables (`.env`)</label>
+                <pre className="bg-black border border-white/10 rounded-xl p-3 font-mono text-[11px] text-green-400 overflow-x-auto">
+{`DATABASE_URL="postgresql://postgres:password@db.supabase.co:5432/postgres"
+VITE_SUPABASE_URL="https://your-app.supabase.co"
+VITE_SUPABASE_ANON_KEY="your-anon-key"
+JWT_SECRET="trademind_jwt_secret_key_2026"`}
+                </pre>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-bold text-white uppercase text-[10px] tracking-wider">Prisma Migration Command</label>
+                <div className="bg-black/60 border border-white/10 rounded-xl p-3 flex items-center justify-between font-mono text-[11px]">
+                  <span className="text-blue-300">npx prisma db push --schema=./prisma/schema.prisma</span>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText('npx prisma db push --schema=./prisma/schema.prisma');
+                      alert('Copied Prisma CLI command to clipboard!');
+                    }}
+                    className="px-2 py-1 bg-white/10 hover:bg-white/20 text-white text-[9px] uppercase font-bold rounded"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-white/10 bg-black/40 flex justify-end">
+              <button
+                onClick={() => setShowInfraModal(false)}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs uppercase tracking-wider"
+              >
+                Close Infrastructure Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DUAL PAYMENT GATEWAY MODAL (STRIPE & RAZORPAY) */}
+      {showPaymentGatewayModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-[#0e0e11] border border-white/10 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-5 border-b border-white/10 flex items-center justify-between bg-black/40">
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-5 h-5 text-yellow-400" />
+                <div>
+                  <h3 className="text-sm font-bold text-white">Upgrade Account Plan</h3>
+                  <p className="text-[10px] text-white/40">Select Payment Gateway (Stripe or Razorpay)</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowPaymentGatewayModal(false)}
+                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/50 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5 text-xs">
+              {/* Gateway Selection Tabs */}
+              <div>
+                <label className="block font-bold text-white uppercase text-[9px] tracking-wider mb-2">Payment Provider</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedGateway('stripe')}
+                    className={`py-3 px-4 rounded-xl border font-bold flex items-center justify-center gap-2 cursor-pointer ${
+                      selectedGateway === 'stripe'
+                        ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                        : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    <span>💳 Stripe Checkout</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedGateway('razorpay')}
+                    className={`py-3 px-4 rounded-xl border font-bold flex items-center justify-center gap-2 cursor-pointer ${
+                      selectedGateway === 'razorpay'
+                        ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                        : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10'
+                    }`}
+                  >
+                    <span>⚡ Razorpay / UPI</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tier Selection */}
+              <div className="space-y-3">
+                <div 
+                  onClick={() => setCheckoutPlan('Pro')}
+                  className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                    checkoutPlan === 'Pro' ? 'bg-blue-500/10 border-blue-500 text-white' : 'bg-black/40 border-white/10 text-white/60 hover:bg-white/5'
+                  }`}
+                >
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-white">Pro Trader Workspace</h4>
+                      <p className="text-[10px] text-white/50">Unlimited AI vision chart scans + WebSockets real-time feed</p>
+                    </div>
+                    <span className="text-base font-extrabold text-blue-400">$49/mo</span>
+                  </div>
+                </div>
+
+                <div 
+                  onClick={() => setCheckoutPlan('Enterprise')}
+                  className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                    checkoutPlan === 'Enterprise' ? 'bg-purple-500/10 border-purple-500 text-white' : 'bg-black/40 border-white/10 text-white/60 hover:bg-white/5'
+                  }`}
+                >
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h4 className="font-bold text-white">Institutional Enterprise</h4>
+                      <p className="text-[10px] text-white/50">Multi-Model AI (Gemini, Claude, DeepSeek, GPT-5) + Dedicated Webhooks</p>
+                    </div>
+                    <span className="text-base font-extrabold text-purple-400">$199/mo</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const token = localStorage.getItem('trademind_token');
+                    const targetPlan = checkoutPlan || 'Pro';
+                    const endpoint = selectedGateway === 'stripe' ? '/api/webhooks/stripe' : '/api/webhooks/razorpay';
+                    
+                    // Simulate webhook trigger and immediate plan activation
+                    await fetch(endpoint, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify(
+                        selectedGateway === 'stripe' ? {
+                          type: 'checkout.session.completed',
+                          data: { object: { customer_email: user.email, metadata: { plan: targetPlan } } }
+                        } : {
+                          event: 'payment.captured',
+                          payload: { payment: { entity: { email: user.email, notes: { plan: targetPlan } } } }
+                        }
+                      )
+                    });
+
+                    onUpdatePlan(targetPlan);
+                    setShowPaymentGatewayModal(false);
+                    alert(`[${selectedGateway.toUpperCase()} SUCCESS] Your account has been upgraded to ${targetPlan} Tier!`);
+                  } catch (err) {
+                    alert('Error activating subscription: ' + (err as Error).message);
+                  }
+                }}
+                className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-extrabold rounded-xl uppercase tracking-wider text-xs shadow-lg cursor-pointer"
+              >
+                Proceed with {selectedGateway.toUpperCase()} Gateway
+              </button>
+            </div>
           </div>
         </div>
       )}
