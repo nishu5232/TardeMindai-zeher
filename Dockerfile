@@ -1,35 +1,30 @@
-# Multi-stage Dockerfile for Trademind AI Terminal
+# Stage 1: build the app
 FROM node:20-alpine AS builder
 
+# Install build deps
 WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --prefer-offline --no-audit --progress=false || npm install
 
-# Copy package files and install dependencies
-COPY package*.json ./
-RUN npm ci
-
-# Copy application source code
+# Copy source and build
 COPY . .
-
-# Generate Prisma Client if schema exists
-RUN npx prisma generate || true
-
-# Build client and server bundles
 RUN npm run build
 
-# Production image runner
+# Stage 2: create minimal runtime image
 FROM node:20-alpine AS runner
-
 WORKDIR /app
-
 ENV NODE_ENV=production
-ENV PORT=3000
 
-# Copy built dist files and package configs
+# Only install production deps
+COPY package.json package-lock.json* ./
+RUN npm ci --only=production --prefer-offline --no-audit --progress=false || npm install --production
+
+# Copy the built server and public files
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/prisma ./prisma
+# If you have any other runtime files (like public/) copy them as needed
 
+# Expose port (Coolify will set PORT env var; default to 3000)
 EXPOSE 3000
 
+# Use the start script defined in package.json
 CMD ["node", "dist/server.cjs"]
