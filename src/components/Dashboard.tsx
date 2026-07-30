@@ -70,6 +70,7 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
   const [showInfraModal, setShowInfraModal] = useState(false);
   const [showPaymentGatewayModal, setShowPaymentGatewayModal] = useState(false);
   const [selectedGateway, setSelectedGateway] = useState<'stripe' | 'razorpay'>('stripe');
+  const [showUserMenu, setShowUserMenu] = useState(false);
 
   // Live WebSocket market data state
   const [wsConnected, setWsConnected] = useState(true);
@@ -900,8 +901,70 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
             <span>Upgrade ({user.plan})</span>
           </button>
 
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 border border-white/20 flex items-center justify-center text-xs font-bold text-white">
-            {user.name.slice(0, 2)}
+          <div className="relative">
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className="flex items-center gap-2 px-2.5 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-medium text-white transition-all cursor-pointer"
+              title="User Account & Session Options"
+            >
+              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 border border-white/20 flex items-center justify-center text-xs font-bold text-white shrink-0">
+                {user.name ? user.name.slice(0, 2).toUpperCase() : 'US'}
+              </div>
+              <div className="hidden md:flex flex-col text-left">
+                <span className="text-xs font-bold text-white leading-tight">{user.name}</span>
+                <span className="text-[10px] text-white/40 leading-tight">{user.plan} Plan</span>
+              </div>
+              <ChevronDown className={`w-3.5 h-3.5 text-white/50 transition-transform duration-200 ${showUserMenu ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showUserMenu && (
+              <>
+                <div 
+                  className="fixed inset-0 z-40" 
+                  onClick={() => setShowUserMenu(false)}
+                />
+                <div className="absolute right-0 mt-2 w-64 bg-[#0d0d11] border border-white/10 rounded-2xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                  <div className="flex items-center gap-3 pb-3 border-b border-white/10">
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 border border-white/20 flex items-center justify-center text-sm font-bold text-white shrink-0">
+                      {user.name ? user.name.slice(0, 2).toUpperCase() : 'US'}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-white truncate">{user.name}</div>
+                      <div className="text-[10px] text-white/40 truncate">{user.email}</div>
+                      <div className="mt-1 inline-block px-2 py-0.5 rounded text-[9px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                        {user.plan} Intel Tier
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="py-2 space-y-1">
+                    <button
+                      onClick={() => {
+                        setActiveTab('settings');
+                        setShowUserMenu(false);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-white/80 hover:text-white hover:bg-white/5 transition-colors cursor-pointer"
+                    >
+                      <Settings className="w-4 h-4 text-blue-400" />
+                      <span>Platform Settings</span>
+                    </button>
+                  </div>
+
+                  <div className="pt-2 border-t border-white/10">
+                    <button
+                      onClick={() => {
+                        setShowUserMenu(false);
+                        onLogout();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors cursor-pointer"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Sign Out of Terminal</span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -2098,6 +2161,35 @@ export default function Dashboard({ user, onLogout, onUpdatePlan }: DashboardPro
                       </button>
                     </div>
                   </div>
+                </div>
+
+                {/* Account & Session Management */}
+                <div className="bg-[#0f0f0f] border border-white/5 rounded-2xl p-5 space-y-4">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-white/40 flex items-center gap-1.5">
+                    <User className="w-4 h-4 text-blue-400" /> Account & Session Management
+                  </h3>
+                  <div className="p-3.5 bg-white/[0.02] border border-white/5 rounded-xl space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-white/40">Account Holder:</span>
+                      <span className="font-bold text-white">{user.name}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-white/40">Registered Email:</span>
+                      <span className="font-bold text-white font-mono text-[11px] truncate max-w-[180px]">{user.email}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-white/40">Current Plan:</span>
+                      <span className="font-bold text-blue-400">{user.plan} Tier</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={onLogout}
+                    className="w-full py-2.5 px-4 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 font-bold rounded-xl text-xs uppercase tracking-wider transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out of Terminal</span>
+                  </button>
                 </div>
               </div>
             </div>

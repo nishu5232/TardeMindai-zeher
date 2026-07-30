@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Mail, Lock, User, Github, Sparkles, AlertCircle, CheckCircle, ArrowRight, RefreshCw } from 'lucide-react';
+import VerifyEmail from './VerifyEmail';
 
 interface AuthProps {
   onLoginSuccess: (user: { name: string; email: string; plan: string }) => void;
@@ -14,6 +15,7 @@ export default function Auth({ onLoginSuccess, onClose }: AuthProps) {
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [verificationData, setVerificationData] = useState<{ email: string; userId?: string } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,14 +48,32 @@ export default function Auth({ onLoginSuccess, onClose }: AuthProps) {
       setLoading(false);
 
       if (!response.ok) {
+        // If login returns 403 requiring verification, redirect to email verification screen
+        if (response.status === 403 && data.requiresVerification) {
+          setVerificationData({
+            email: data.email || email,
+            userId: data.userId
+          });
+          return;
+        }
         throw new Error(data.error || 'Authentication failed');
       }
 
-      // Save credentials in client browser context
-      localStorage.setItem('trademind_user', JSON.stringify(data.user));
-      localStorage.setItem('trademind_token', data.token);
+      // Check if registration requires email verification step
+      if (!isLogin && data.requiresVerification) {
+        setVerificationData({
+          email: data.email || email,
+          userId: data.userId
+        });
+        return;
+      }
 
-      onLoginSuccess(data.user);
+      // Save credentials in client browser context
+      if (data.token && data.user) {
+        localStorage.setItem('trademind_user', JSON.stringify(data.user));
+        localStorage.setItem('trademind_token', data.token);
+        onLoginSuccess(data.user);
+      }
     } catch (err) {
       setLoading(false);
       setMessage({ type: 'error', text: (err as Error).message });
@@ -112,19 +132,27 @@ export default function Auth({ onLoginSuccess, onClose }: AuthProps) {
         {/* Close Button */}
         <button 
           onClick={onClose}
-          className="absolute top-4 right-4 p-2 text-white/40 hover:text-white rounded-full hover:bg-white/5 transition-colors"
+          className="absolute top-4 right-4 z-10 p-2 text-white/40 hover:text-white rounded-full hover:bg-white/5 transition-colors"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
 
-        <div className="p-8 relative">
-          {/* Brand */}
-          <div className="flex items-center gap-2 mb-8 justify-center">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]">T</div>
-            <span className="text-xl font-bold tracking-tight text-white">Trademind<span className="text-blue-500">.ai</span></span>
-          </div>
+        {verificationData ? (
+          <VerifyEmail
+            email={verificationData.email}
+            userId={verificationData.userId}
+            onVerificationSuccess={onLoginSuccess}
+            onBackToLogin={() => setVerificationData(null)}
+          />
+        ) : (
+          <div className="p-8 relative">
+            {/* Brand */}
+            <div className="flex items-center gap-2 mb-8 justify-center">
+              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-white shadow-[0_0_15px_rgba(37,99,235,0.4)]">T</div>
+              <span className="text-xl font-bold tracking-tight text-white">TradeMind<span className="text-blue-500">.ai</span></span>
+            </div>
 
           <div className="text-center mb-6">
             <h2 className="text-lg font-bold text-white">
@@ -288,7 +316,8 @@ export default function Auth({ onLoginSuccess, onClose }: AuthProps) {
             )}
           </div>
         </div>
-      </div>
+      )}
     </div>
-  );
+  </div>
+);
 }

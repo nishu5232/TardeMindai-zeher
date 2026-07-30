@@ -4,9 +4,17 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { store } from './server/db';
+import { sendVerificationEmail, EmailResult } from './server/email';
 
 // Load environment variables
 dotenv.config();
+
+// Production environment variable startup checks
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('FATAL: RESEND_API_KEY environment variable is missing in production environment');
+  }
+}
 
 // Initialize Google Gen AI
 const geminiKey = process.env.GEMINI_API_KEY || '';
@@ -26,12 +34,12 @@ async function startServer() {
   });
 
   // Authentication Middleware
-  const authenticateToken = (req: any, res: express.Response, next: express.NextFunction) => {
+  const authenticateToken = async (req: any, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1]; // Bearer <token>
 
     if (!token) {
-      return res.status(410).json({ error: 'Authorization header with token is required' });
+      return res.status(401).json({ error: 'Authorization header with token is required' });
     }
 
     const userId = store.verifyToken(token);
@@ -39,7 +47,7 @@ async function startServer() {
       return res.status(401).json({ error: 'Token is invalid or expired. Please sign in again.' });
     }
 
-    const user = store.getUserById(userId);
+    const user = await store.getUserById(userId);
     if (!user) {
       return res.status(401).json({ error: 'User associated with this token was not found' });
     }
@@ -48,15 +56,33 @@ async function startServer() {
     next();
   };
 
+  // Admin Authorization Middleware
+  const requireAdmin = (req: any, res: express.Response, next: express.NextFunction) => {
+    if (!req.user || !req.user.email) {
+      return res.status(403).json({ error: 'Access denied: Administrator privileges required' });
+    }
+
+    const email = req.user.email.toLowerCase();
+    const isAdmin = email.endsWith('@trademind.ai') || 
+                    email === 'binzadearvind83@gmail.com' || 
+                    email.startsWith('admin');
+
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Access denied: Administrator privileges required' });
+    }
+
+    next();
+  };
+
   // Optional Authentication Middleware (for landing page analytics checks)
-  const optionalAuthenticate = (req: any, res: express.Response, next: express.NextFunction) => {
+  const optionalAuthenticate = async (req: any, res: express.Response, next: express.NextFunction) => {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
 
     if (token) {
       const userId = store.verifyToken(token);
       if (userId) {
-        const user = store.getUserById(userId);
+        const user = await store.getUserById(userId);
         if (user) {
           req.user = user;
         }
@@ -79,28 +105,116 @@ async function startServer() {
         return res.status(400).json({ error: 'Password must be at least 6 characters long' });
       }
 
-      const existingUser = store.getUserByEmail(email);
+      const existingUser = await store.getUserByEmail(email);
       if (existingUser) {
         return res.status(400).json({ error: 'An account with this email address already exists' });
       }
 
-      const passwordHash = store.hashPassword(password);
-      const user = store.createUser(name, email, passwordHash);
-      const token = store.generateToken(user.id);
+      const passwordSalt = store.generateSalt();
+      const passwordHash = store.hashPassword(password, passwordSalt);
+      const user = await store.createUser(name, email, passwordHash, passwordSalt);
+
+      // Dispatch 6-digit verification email
+      let emailResult: EmailResult = { success: true };
+      if (user.verificationCode) {
+        emailResult = await sendVerificationEmail(user.email, user.name, user.verificationCode);
+      }
+
+      if (!emailResult.success) {
+        return res.status(201).json({
+          message: 'Account created, but verification email failed to deliver. Please use "Resend code" on the verification screen to try again.',
+          userId: user.id,
+          email: user.email,
+          requiresVerification: true,
+          emailDeliveryFailed: true,
+          emailError: emailResult.error
+        });
+      }
 
       res.status(201).json({
-        token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          plan: user.plan,
-          createdAt: user.createdAt
-        }
+        message: 'Verification code sent to your email',
+        userId: user.id,
+        email: user.email,
+        requiresVerification: true
       });
     } catch (error) {
       console.error('Registration error:', error);
       res.status(500).json({ error: 'An error occurred during account creation' });
+    }
+  });
+
+  // Verify Email Code Endpoint
+  app.post('/api/auth/verify-email', async (req, res) => {
+    try {
+      const { userId, email, code } = req.body;
+      const identifier = userId || email;
+
+      if (!identifier || !code) {
+        return res.status(400).json({ error: 'User identifier (userId or email) and 6-digit verification code are required' });
+      }
+
+      const result = await store.verifyEmailCode(identifier, String(code).trim());
+      if (!result.success || !result.user) {
+        return res.status(400).json({ error: result.message || 'Email verification failed' });
+      }
+
+      const token = store.generateToken(result.user.id);
+
+      res.json({
+        message: 'Email address successfully verified',
+        token,
+        user: {
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+          plan: result.user.plan,
+          emailVerified: true,
+          createdAt: result.user.createdAt
+        }
+      });
+    } catch (error) {
+      console.error('Email verification error:', error);
+      res.status(500).json({ error: 'An error occurred during email verification' });
+    }
+  });
+
+  // Resend Verification Code Endpoint
+  app.post('/api/auth/resend-verification', async (req, res) => {
+    try {
+      const { email, userId } = req.body;
+      const identifier = userId || email;
+
+      if (!identifier) {
+        return res.status(400).json({ error: 'Email address or user ID is required' });
+      }
+
+      const result = await store.regenerateVerificationCode(identifier);
+      if (!result.success) {
+        const statusCode = result.retryAfter ? 429 : 400;
+        return res.status(statusCode).json({ error: result.message, retryAfter: result.retryAfter });
+      }
+
+      let emailResult: EmailResult = { success: true };
+      if (result.user && result.code) {
+        emailResult = await sendVerificationEmail(result.user.email, result.user.name, result.code);
+      }
+
+      if (!emailResult.success) {
+        return res.status(500).json({
+          error: 'Failed to send verification email via Resend API. Please try again in a few moments.',
+          emailDeliveryFailed: true,
+          emailError: emailResult.error
+        });
+      }
+
+      res.json({
+        message: 'A new 6-digit verification code has been sent to your email address',
+        email: result.user?.email,
+        userId: result.user?.id
+      });
+    } catch (error) {
+      console.error('Resend verification error:', error);
+      res.status(500).json({ error: 'An error occurred while resending verification code' });
     }
   });
 
@@ -112,14 +226,28 @@ async function startServer() {
         return res.status(400).json({ error: 'Email and password are required' });
       }
 
-      const user = store.getUserByEmail(email);
+      const user = await store.getUserByEmail(email);
       if (!user) {
         return res.status(400).json({ error: 'Invalid email or password' });
       }
 
-      const hashedInput = store.hashPassword(password);
+      if (!user.passwordSalt) {
+        return res.status(400).json({ error: 'Invalid email or password. Password reset required due to security upgrades.' });
+      }
+
+      const hashedInput = store.hashPassword(password, user.passwordSalt);
       if (user.passwordHash !== hashedInput) {
         return res.status(400).json({ error: 'Invalid email or password' });
+      }
+
+      // Block login for unverified accounts
+      if (!user.emailVerified) {
+        return res.status(403).json({
+          error: 'Email not verified',
+          requiresVerification: true,
+          userId: user.id,
+          email: user.email
+        });
       }
 
       const token = store.generateToken(user.id);
@@ -131,6 +259,7 @@ async function startServer() {
           name: user.name,
           email: user.email,
           plan: user.plan,
+          emailVerified: user.emailVerified,
           createdAt: user.createdAt
         }
       });
@@ -168,7 +297,7 @@ async function startServer() {
       const transactionId = 'sub_' + Math.random().toString(36).substring(2, 15);
       
       // Update the user tier on-device
-      const updatedUser = store.updateUserPlan(req.user.id, plan as any, transactionId);
+      const updatedUser = await store.updateUserPlan(req.user.id, plan as any, transactionId);
 
       res.json({
         success: true,
@@ -190,7 +319,7 @@ async function startServer() {
   // Cancel Subscription
   app.post('/api/subscription/cancel', authenticateToken, async (req: any, res) => {
     try {
-      const updatedUser = store.updateUserPlan(req.user.id, 'Free', '');
+      const updatedUser = await store.updateUserPlan(req.user.id, 'Free', '');
       res.json({
         success: true,
         message: 'Subscription cancelled successfully.',
@@ -211,9 +340,9 @@ async function startServer() {
   // --- QUANTITATIVE TRADE JOURNAL ENDPOINTS ---
 
   // Get Trades
-  app.get('/api/journal', authenticateToken, (req: any, res) => {
+  app.get('/api/journal', authenticateToken, async (req: any, res) => {
     try {
-      const trades = store.getTrades(req.user.id);
+      const trades = await store.getTrades(req.user.id);
       res.json({ trades });
     } catch (error) {
       res.status(500).json({ error: 'Failed to retrieve trade journal records' });
@@ -221,7 +350,7 @@ async function startServer() {
   });
 
   // Add Trade
-  app.post('/api/journal', authenticateToken, (req: any, res) => {
+  app.post('/api/journal', authenticateToken, async (req: any, res) => {
     try {
       const { date, symbol, type, entry, exit, size, notes } = req.body;
       if (!date || !symbol || !type || !entry || !exit || !size) {
@@ -242,7 +371,7 @@ async function startServer() {
       const multiplier = type === 'Buy' ? 1 : -1;
       const pnl = parseFloat(((parsedExit - parsedEntry) * parsedSize * multiplier).toFixed(2));
 
-      const newTrade = store.addTrade(req.user.id, {
+      const newTrade = await store.addTrade(req.user.id, {
         date,
         symbol: symbol.toUpperCase(),
         type: type as 'Buy' | 'Sell',
@@ -260,10 +389,10 @@ async function startServer() {
   });
 
   // Delete Trade
-  app.delete('/api/journal/:id', authenticateToken, (req: any, res) => {
+  app.delete('/api/journal/:id', authenticateToken, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const deleted = store.deleteTrade(req.user.id, id);
+      const deleted = await store.deleteTrade(req.user.id, id);
       if (!deleted) {
         return res.status(404).json({ error: 'Trade record not found' });
       }
@@ -277,9 +406,9 @@ async function startServer() {
   // --- SAAS SAAS ANALYTICS ENDPOINT ---
 
   // Calculates real portfolio metrics from server-side user data
-  app.get('/api/analytics', authenticateToken, (req: any, res) => {
+  app.get('/api/analytics', authenticateToken, async (req: any, res) => {
     try {
-      const trades = store.getTrades(req.user.id);
+      const trades = await store.getTrades(req.user.id);
       
       if (trades.length === 0) {
         return res.json({
@@ -339,9 +468,9 @@ async function startServer() {
   // --- REAL-TIME ALERTS ENDPOINTS ---
 
   // Get Alerts
-  app.get('/api/alerts', authenticateToken, (req: any, res) => {
+  app.get('/api/alerts', authenticateToken, async (req: any, res) => {
     try {
-      const alerts = store.getAlerts(req.user.id);
+      const alerts = await store.getAlerts(req.user.id);
       res.json({ alerts });
     } catch (error) {
       res.status(500).json({ error: 'Failed to retrieve active alerts' });
@@ -349,7 +478,7 @@ async function startServer() {
   });
 
   // Create Alert
-  app.post('/api/alerts', authenticateToken, (req: any, res) => {
+  app.post('/api/alerts', authenticateToken, async (req: any, res) => {
     try {
       const { symbol, condition, value } = req.body;
       if (!symbol || !condition || !value) {
@@ -361,7 +490,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Alert target value must be a valid number' });
       }
 
-      const newAlert = store.addAlert(req.user.id, {
+      const newAlert = await store.addAlert(req.user.id, {
         symbol: symbol.toUpperCase(),
         condition: condition as 'above' | 'below',
         value: parsedValue
@@ -374,10 +503,10 @@ async function startServer() {
   });
 
   // Trigger Alert
-  app.post('/api/alerts/:id/trigger', authenticateToken, (req: any, res) => {
+  app.post('/api/alerts/:id/trigger', authenticateToken, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const triggered = store.triggerAlert(req.user.id, id);
+      const triggered = await store.triggerAlert(req.user.id, id);
       if (!triggered) {
         return res.status(404).json({ error: 'Alert not found or already triggered' });
       }
@@ -388,10 +517,10 @@ async function startServer() {
   });
 
   // Delete Alert
-  app.delete('/api/alerts/:id', authenticateToken, (req: any, res) => {
+  app.delete('/api/alerts/:id', authenticateToken, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const deleted = store.deleteAlert(req.user.id, id);
+      const deleted = await store.deleteAlert(req.user.id, id);
       if (!deleted) {
         return res.status(404).json({ error: 'Alert record not found' });
       }
@@ -405,17 +534,13 @@ async function startServer() {
   // --- SAAS ADMINISTRATIVE METRICS ENDPOINTS ---
 
   // Get Admin Stats
-  app.get('/api/admin/metrics', authenticateToken, (req: any, res) => {
+  app.get('/api/admin/metrics', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
-      const stats = store.getAdminStats();
-      const isAdmin = req.user.email.toLowerCase().endsWith('@trademind.ai') || 
-                      req.user.email.toLowerCase() === 'binzadearvind83@gmail.com' || 
-                      req.user.email.toLowerCase().startsWith('admin');
-      
+      const stats = await store.getAdminStats();
       res.json({ 
         stats,
         accessGranted: true,
-        isAdminUser: isAdmin
+        isAdminUser: true
       });
     } catch (error) {
       res.status(500).json({ error: 'Failed to compile administrator system metrics' });
@@ -423,14 +548,14 @@ async function startServer() {
   });
 
   // Admin delete/suspend user
-  app.delete('/api/admin/users/:id', authenticateToken, (req: any, res) => {
+  app.delete('/api/admin/users/:id', authenticateToken, requireAdmin, async (req: any, res) => {
     try {
       const { id } = req.params;
       if (id === req.user.id) {
         return res.status(400).json({ error: 'Administrators cannot delete their own profile' });
       }
 
-      const deleted = store.deleteUser(id);
+      const deleted = await store.deleteUser(id);
       if (!deleted) {
         return res.status(404).json({ error: 'User not found' });
       }
@@ -461,9 +586,9 @@ async function startServer() {
         const email = event.data?.object?.customer_email || event.data?.object?.email;
         const plan = event.data?.object?.metadata?.plan || 'Pro';
         if (email) {
-          const user = store.getUserByEmail(email);
+          const user = await store.getUserByEmail(email);
           if (user) {
-            store.updateUserPlan(user.id, plan);
+            await store.updateUserPlan(user.id, plan);
             console.log(`Updated user ${email} to plan ${plan} via Stripe Webhook`);
           }
         }
@@ -483,9 +608,9 @@ async function startServer() {
         const email = event.payload?.payment?.entity?.email;
         const notesPlan = event.payload?.payment?.entity?.notes?.plan || 'Pro';
         if (email) {
-          const user = store.getUserByEmail(email);
+          const user = await store.getUserByEmail(email);
           if (user) {
-            store.updateUserPlan(user.id, notesPlan);
+            await store.updateUserPlan(user.id, notesPlan);
             console.log(`Updated user ${email} to plan ${notesPlan} via Razorpay Webhook`);
           }
         }
@@ -514,7 +639,7 @@ async function startServer() {
       // Check tier limit: Free users have limited API access or scan allowance
       const user = req.user;
       if (user) {
-        const analyses = store.getAnalyses(user.id);
+        const analyses = await store.getAnalyses(user.id);
         if (user.plan === 'Free' && analyses.length >= 3) {
           return res.status(403).json({ 
             error: 'Free Tier account scan limit reached. Please upgrade to Pro or Enterprise for unlimited high-performance visual scans!' 
@@ -593,7 +718,7 @@ async function startServer() {
 
       // Save analysis history on-disk for authenticated users
       if (user) {
-        store.addAnalysis(user.id, parsedAnalysis);
+        await store.addAnalysis(user.id, parsedAnalysis);
       }
 
       res.json(parsedAnalysis);
